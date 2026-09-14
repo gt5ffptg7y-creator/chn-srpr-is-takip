@@ -28,7 +28,7 @@ input,select,textarea{width:100%;background:#0b1625;border:1px solid var(--borde
 </head>
 <body>
 <div class="app">
-<header class="top"><div><div class="brand">Chn <span>SRPR</span></div><div class="sub">İş Takip & Raporlama</div></div><button class="iconbtn" id="notifyBtn">🔔</button></header>
+<header class="top"><div><div class="brand">Chn <span>SRPR</span></div><div class="sub">İş Takip & Raporlama</div><div id="syncState" class="sync">☁ Bağlanıyor…</div></div><button class="iconbtn" id="notifyBtn">🔔</button></header>
 <main>
 <section id="home" class="screen active">
 <div class="hero"><h1>Bugünün Özeti</h1><p id="today"></p></div>
@@ -83,7 +83,12 @@ input,select,textarea{width:100%;background:#0b1625;border:1px solid var(--borde
 <div class="field"><label>Not</label><textarea id="note" placeholder="Açıklama..."></textarea></div>
 <div class="actions"><button class="btn secondary" onclick="closeTask()">Vazgeç</button><button class="btn primary" onclick="saveTask()">Kaydet</button></div>
 </div></div><div class="toast" id="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+const SUPABASE_URL="PASTE_SUPABASE_URL_HERE";
+const SUPABASE_ANON_KEY="sb_publishable_mhMw98PESVRIh8cHTRpQRQ_P7QDI2ts";
+let sb=null, remoteReady=false;
+if(!SUPABASE_URL.includes("PASTE_")){sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);remoteReady=true;}
 const KEY='chn_srpr_tasks_v1';
 let tasks=JSON.parse(localStorage.getItem(KEY)||'[]');
 const $=id=>document.getElementById(id);
@@ -131,12 +136,12 @@ $('reportBody').innerHTML=counts.map(([s,c])=>`<div class="card" style="margin:8
 function openTask(id=null){$('modal').classList.add('show');$('editId').value=id||'';$('modalTitle').textContent=id?'İşi Düzenle':'Yeni İş';
 if(id){let t=tasks.find(x=>x.id===id);$('title').value=t.title;$('project').value=t.project;$('date').value=t.date;$('time').value=t.time;$('deadline').value=t.deadline||t.date;$('deadlineTime').value=t.deadlineTime||t.time;$('priority').value=t.priority;$('status').value=t.status;$('note').value=t.note}else{$('title').value='';$('project').value='';let d=new Date();$('date').value=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;$('time').value='';$('deadline').value=$('date').value;$('deadlineTime').value='';$('priority').value='Orta';$('status').value='Bekliyor';$('note').value=''}}
 function closeTask(){$('modal').classList.remove('show')}
-function saveTask(){let title=$('title').value.trim(),date=$('date').value;if(!title||!date){toast('İş başlığı ve tarih zorunlu.');return}let id=$('editId').value;
+async function saveTask(){let title=$('title').value.trim(),date=$('date').value;if(!title||!date){toast('İş başlığı ve tarih zorunlu.');return}let id=$('editId').value;
 let deadline=$('deadline').value;if(!deadline){toast('Termin tarihi zorunlu.');return}if(new Date(deadline)<new Date(date)){toast('Termin tarihi iş tarihinden önce olamaz.');return}let obj={id:id||crypto.randomUUID(),title,project:$('project').value.trim(),date,time:$('time').value,deadline,deadlineTime:$('deadlineTime').value,priority:$('priority').value,status:$('status').value,note:$('note').value.trim(),created:new Date().toISOString()};
-if(id)tasks=tasks.map(t=>t.id===id?{...t,...obj}:t);else tasks.push(obj);save();closeTask();toast('İş kaydedildi.');}
+if(id)tasks=tasks.map(t=>t.id===id?{...t,...obj}:t);else tasks.push(obj);persistLocal();render();closeTask();toast('İş kaydedildi.');await pushRemote(obj)}
 function editTask(id){openTask(id)}
-function deleteTask(id){if(confirm('Bu işi silmek istediğine emin misin?')){tasks=tasks.filter(t=>t.id!==id);save();toast('İş silindi.')}}
-function toggleDone(id){tasks=tasks.map(t=>t.id===id?{...t,status:t.status==='Tamamlandı'?'Bekliyor':'Tamamlandı'}:t);save()}
+async function deleteTask(id){if(confirm('Bu işi silmek istediğine emin misin?')){tasks=tasks.filter(t=>t.id!==id);persistLocal();render();await deleteRemote(id);toast('İş silindi.')}}
+async function toggleDone(id){tasks=tasks.map(t=>t.id===id?{...t,status:t.status==='Tamamlandı'?'Bekliyor':'Tamamlandı',updated_at:new Date().toISOString()}:t);persistLocal();render();await pushRemote(tasks.find(x=>x.id===id))}
 function toast(x){$('toast').textContent=x;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2200)}
 async function requestNotifications(){if(!('Notification'in window)){toast('Bu cihaz/tarayıcı bildirimleri desteklemiyor.');return}let p=await Notification.requestPermission();toast(p==='granted'?'Bildirimler açıldı.':'Bildirim izni verilmedi.');checkNotifications()}
 function checkNotifications(){if(!('Notification'in window)||Notification.permission!=='granted')return;let todayKey=new Date().toISOString().slice(0,10);let sent=JSON.parse(localStorage.getItem('chn_sent')||'{}');tasks.filter(t=>t.status!=='Tamamlandı'&&isUpcoming(t)).forEach(t=>{let key=t.id+'_'+todayKey;if(!sent[key]&&dueDate(t)-now()<24*3600000){new Notification('Yaklaşan iş: '+t.title,{body:`Termin: ${fmtDate(t.deadline||t.date)} ${t.deadlineTime||t.time||''}${t.project?' · '+t.project:''}`});sent[key]=1}});localStorage.setItem('chn_sent',JSON.stringify(sent))}
@@ -146,6 +151,6 @@ function clearAll(){if(confirm('TÜM işler silinecek. Emin misin?')){tasks=[];s
 document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));$(b.dataset.screen).classList.add('active');render()});
 $('search').oninput=render;$('filterStatus').onchange=render;$('filterPriority').onchange=render;$('notifyBtn').onclick=requestNotifications;
 if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
-render();checkNotifications();setInterval(()=>{render();checkNotifications()},60000);
+render();checkNotifications();pullRemote();setInterval(()=>{render();checkNotifications();if(remoteReady)pullRemote()},60000);
 </script>
 </body></html>
